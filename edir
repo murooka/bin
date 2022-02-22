@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -ue
+
+DIR="$1"
+shift
+
+if [ ! -d "$DIR" ]; then
+  echo "usage: $(basename "$0") directory command"
+  exit 1
+fi
+
+cd "$DIR"
+
+eval "$@"

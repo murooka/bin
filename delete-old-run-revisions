@@ -1,0 +1,83 @@
+#!/bin/bash
+
+set -ue
+
+usage() {
+  echo "usage: $(basename "$0") -p GCP_PROJECT [-r REGION] -s SERVICE [-e]"
+  exit 1
+}
+
+PROJECT=""
+REGION="asia-northeast1"
+SERVICE=""
+EXEC=""
+
+while getopts p:r:s:eh OPT
+do
+  case $OPT in
+    p)
+      PROJECT=$OPTARG
+      ;;
+    r)
+      REGION=$OPTARG
+      ;;
+    s)
+      SERVICE=$OPTARG
+      ;;
+    e)
+      EXEC=1
+      ;;
+    h) usage
+      ;;
+    \?) usage
+      ;;
+  esac
+done
+
+if [ -z "$PROJECT" ] || [ -z "$REGION" ]; then
+  usage
+fi
+
+if [ -z "$EXEC" ]; then
+  echo "This is dry-run mode"
+fi
+
+reserved_names=""
+all_names=""
+
+if [ -z "$SERVICE" ]; then
+  reserved_names=$(gcloud --project "$PROJECT" run services list --platform managed --region "$REGION" --format json | jq -r '.[] | .status | .latestCreatedRevisionName,.latestReadyRevisionName,(.traffic[] | .revisionName)' | sort | uniq)
+  all_names=$(gcloud --project "$PROJECT" run revisions list --platform managed --region "$REGION" --format json | jq -r '.[] | .metadata.name' | sort)
+else
+  reserved_names=$(gcloud --project "$PROJECT" run services describe --platform managed --region "$REGION" --format json "$SERVICE" | jq -r '.status | .latestCreatedRevisionName,.latestReadyRevisionName,(.traffic[] | .revisionName)' | sort | uniq)
+  all_names=$(gcloud --project "$PROJECT" run revisions list --platform managed --region "$REGION" --service "$SERVICE" --format json | jq -r '.[] | .metadata.name' | sort)
+fi
+
+echo ""
+comm -2 <(echo "$all_names") <(echo "$reserved_names") | sed 's/^\t/-/g' | sed 's/^\([^-]\)/[x] \1/g' | sed 's/^-/[ ] /g'
+echo ""
+
+target_names=$(comm -23 <(echo "$all_names") <(echo "$reserved_names"))
+
+if [ -z "$target_names" ]; then
+  echo "no revisions can be deleted"
+  exit 0
+fi
+
+while true; do
+  read -r -p "Do you want to continue (Y/n)? " yn
+  case $yn in
+    [Yy]* ) break;;
+    [Nn]* ) exit;;
+    * ) echo "Please answer yes or no.";;
+  esac
+done
+
+echo "$target_names" | while read -r name; do
+if [ -z "$EXEC" ]; then
+  echo "[dry-run] Deleting $name..."
+else
+  gcloud --project "$PROJECT" run revisions delete --platform managed --region "$REGION" --async --quiet "$name"
+fi
+done
+
